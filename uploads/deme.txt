@@ -1,1 +1,1 @@
-file uploads
+flask --app app.py --debug run 
