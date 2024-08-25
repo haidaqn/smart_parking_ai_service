@@ -21,25 +21,20 @@ os.makedirs(YOLO_OUTPUT_FOLDER, exist_ok=True)
 
 model = YOLO(MODEL_PATH)
 def extract_text_from_image(image):
-    # Resize image for faster processing
+    image = Image.open(image.stream)
     width, height = image.size
-    image = image.resize((width // 2, height // 2), Image.LANCZOS)
+    image = image.resize((width // 2, height // 2), Image.Resampling.LANCZOS)
 
     if image.mode == 'RGBA':
         image = image.convert('RGB')
 
-    image_buffer = io.BytesIO()
-    image.save(image_buffer, format="JPEG")
-    image_buffer.seek(0)
+    image_io = io.BytesIO()
+    image.save(image_io, format='JPEG')
+    image_io.seek(0)
+    image_data = image_io.read()
 
-    post_data = (
-        b"------WebKitFormBoundary\r\n"
-        b"Content-Disposition: form-data; name=\"encoded_image\"; filename=\"image.jpg\"\r\n"
-        b"Content-Type: image/jpeg\r\n\r\n" +
-        image_buffer.read() +
-        b"\r\n------WebKitFormBoundary--\r\n"
-    )
-
+    post_data = b"------WebKitFormBoundary\r\nContent-Disposition: form-data; name=\"encoded_image\"; filename=\"download.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n" + \
+        image_data + b"\r\n------WebKitFormBoundary--\r\n"
     headers = {
         'Content-Type': 'multipart/form-data; boundary=----WebKitFormBoundary',
         'Content-Length': str(len(post_data)),
@@ -47,21 +42,37 @@ def extract_text_from_image(image):
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
     }
 
-    response = req.post(f'https://lens.google.com/v3/upload?hl=en-VN&re=df&stcs={time.time_ns() // 10**6}&ep=subb', headers=headers, data=post_data)
-    
-    text = re.findall(r'\"vi\".*?]\]\]', response.text)
-    print(text)
-    if not text:
-        return None
-    
-    return text   
+    response = req.post(
+        f'https://lens.google.com/v3/upload?hl=en-VN&re=df&stcs={time.time_ns() // 10**6}&ep=subb', headers=headers, data=post_data)
 
-@app.route('/upload', methods=['POST'])
+    with open('response.html', 'w', encoding='utf-8') as f:
+        f.write(response.text)
+    pattern = r'"([^"]*)",\[\[\[(.*?)\]\]\]'
+    
+    match = re.findall(pattern, response.text)
+    
+    extracted_text = ' '.join(re.findall(
+        r'\"(.*?)\"]]', match[0][1])) if match else ''
+
+    if extracted_text.find('\\'):
+        extracted_text = extracted_text.replace('\\', '') 
+        extracted_text = extracted_text.replace('"', '')
+
+        parts = extracted_text.split(',')
+        amount = parts[1].replace('.', '')
+        
+        return f"{parts[0]} - {amount}"
+    
+    return extracted_text
+    
+    
+
+@app.route('/image_to_text', methods=['POST'])
 def upload_file():
-    if 'file' not in request.files:
+    if 'image' not in request.files:
         return jsonify({'error': 'No file part'}), 400
     
-    file = request.files['file']
+    file = request.files['image']
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     
@@ -69,34 +80,24 @@ def upload_file():
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     
     try:
-        # Save the uploaded file to the UPLOAD_FOLDER
         file.save(filepath)
-        
-        # Predict and save the results in the YOLO_OUTPUT_FOLDER
         results = model.predict(source=filepath, save_txt=True, save=True, exist_ok=True)
         
-        # Find all output files in the YOLO_OUTPUT_FOLDER
         output_files = os.listdir(YOLO_OUTPUT_FOLDER)
         if not output_files:
             return jsonify({'error': 'No output files found in the YOLO output folder'}), 500
-
-        # Find the latest output file based on creation time
         latest_output_file = max([os.path.join(YOLO_OUTPUT_FOLDER, f) for f in output_files], key=os.path.getctime)
 
         if not os.path.exists(latest_output_file):
             return jsonify({'error': f'Output file not found at {latest_output_file}'}), 500
-
-        # Set output file name
+        
         output_filename = f"processed_{filename}"
         filePathOutput = os.path.join(OUTPUT_FOLDER, output_filename)
-
-        # Save the processed image to the OUTPUT_FOLDER
         processed_image = Image.open(latest_output_file)
         processed_image.save(filePathOutput)
-
-        # Open the original image for text analysis
-        img = Image.open(filepath)
-        text_data = extract_text_from_image(img)
+        
+        
+        text_data = extract_text_from_image(file)
 
         if text_data:
             return jsonify({"text": text_data, "output_image": filePathOutput})
