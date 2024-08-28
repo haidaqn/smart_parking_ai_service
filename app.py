@@ -45,8 +45,7 @@ def extract_text_from_image(image):
     response = req.post(
         f'https://lens.google.com/v3/upload?hl=en-VN&re=df&stcs={time.time_ns() // 10**6}&ep=subb', headers=headers, data=post_data)
 
-    with open('response.html', 'w', encoding='utf-8') as f:
-        f.write(response.text)
+    
     pattern = r'"([^"]*)",\[\[\[(.*?)\]\]\]'
     
     match = re.findall(pattern, response.text)
@@ -54,14 +53,14 @@ def extract_text_from_image(image):
     extracted_text = ' '.join(re.findall(
         r'\"(.*?)\"]]', match[0][1])) if match else ''
 
-    if extracted_text.find('\\'):
-        extracted_text = extracted_text.replace('\\', '') 
-        extracted_text = extracted_text.replace('"', '')
+    # if extracted_text.find('\\'):
+    #     extracted_text = extracted_text.replace('\\', '') 
+    #     extracted_text = extracted_text.replace('"', '')
 
-        parts = extracted_text.split(',')
-        amount = parts[1].replace('.', '')
+    #     parts = extracted_text.split(',')
+    #     amount = parts[1].replace('.', '')
         
-        return f"{parts[0]} - {amount}"
+    #     return f"{parts[0]} - {amount}"
     
     return extracted_text
     
