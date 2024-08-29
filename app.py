@@ -12,22 +12,34 @@ app = Flask(__name__)
 
 MODEL_PATH = 'best.pt'
 UPLOAD_FOLDER = os.path.abspath('./uploads')
-OUTPUT_FOLDER = os.path.abspath('./output')
-YOLO_OUTPUT_FOLDER = os.path.abspath('./runs/detect/predict')
+YOLO_OUTPUT_FOLDER = os.path.abspath('./runs/detect/predict/labels')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-os.makedirs(YOLO_OUTPUT_FOLDER, exist_ok=True)
 
 model = YOLO(MODEL_PATH)
+
+def read_bounding_boxes(file_path):
+    bounding_boxes = []
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                bounding_boxes.append([float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])])
+    return bounding_boxes
+
+def crop_image(image, bounding_box):
+    image_width, image_height = image.size
+    x_center, y_center, width, height = bounding_box
+    left = int((x_center - width / 2) * image_width)
+    right = int((x_center + width / 2) * image_width)
+    top = int((y_center - height / 2) * image_height)
+    bottom = int((y_center + height / 2) * image_height)
+    cropped_image = image.crop((left, top, right, bottom))
+
+    return cropped_image
+
 def extract_text_from_image(image):
-    image = Image.open(image.stream)
-    width, height = image.size
-    image = image.resize((width // 2, height // 2), Image.Resampling.LANCZOS)
-
-    if image.mode == 'RGBA':
-        image = image.convert('RGB')
-
     image_io = io.BytesIO()
     image.save(image_io, format='JPEG')
     image_io.seek(0)
@@ -45,7 +57,6 @@ def extract_text_from_image(image):
     response = req.post(
         f'https://lens.google.com/v3/upload?hl=en-VN&re=df&stcs={time.time_ns() // 10**6}&ep=subb', headers=headers, data=post_data)
 
-    
     pattern = r'"([^"]*)",\[\[\[(.*?)\]\]\]'
     
     match = re.findall(pattern, response.text)
@@ -53,20 +64,9 @@ def extract_text_from_image(image):
     extracted_text = ' '.join(re.findall(
         r'\"(.*?)\"]]', match[0][1])) if match else ''
 
-    # if extracted_text.find('\\'):
-    #     extracted_text = extracted_text.replace('\\', '') 
-    #     extracted_text = extracted_text.replace('"', '')
-
-    #     parts = extracted_text.split(',')
-    #     amount = parts[1].replace('.', '')
-        
-    #     return f"{parts[0]} - {amount}"
-    
     return extracted_text
-    
-    
 
-@app.route('/image_to_text', methods=['POST'])
+@app.route('/', methods=['POST'])
 def upload_file():
     if 'image' not in request.files:
         return jsonify({'error': 'No file part'}), 400
@@ -80,31 +80,30 @@ def upload_file():
     
     try:
         file.save(filepath)
-        results = model.predict(source=filepath, save_txt=True, save=True, exist_ok=True)
+        results = model.predict(source=filepath, save_txt=True, save=False, exist_ok=True)
         
-        output_files = os.listdir(YOLO_OUTPUT_FOLDER)
-        if not output_files:
-            return jsonify({'error': 'No output files found in the YOLO output folder'}), 500
-        latest_output_file = max([os.path.join(YOLO_OUTPUT_FOLDER, f) for f in output_files], key=os.path.getctime)
+        label_file_path = os.path.join(YOLO_OUTPUT_FOLDER, f"{os.path.splitext(filename)[0]}.txt")
+        if not os.path.exists(label_file_path):
+            return jsonify({'error': f'Label file not found at {label_file_path}'}), 500
 
-        if not os.path.exists(latest_output_file):
-            return jsonify({'error': f'Output file not found at {latest_output_file}'}), 500
+        bounding_boxes = read_bounding_boxes(label_file_path)
+        if not bounding_boxes:
+            return jsonify({'error': 'No bounding boxes found in the label file'}), 400
         
-        output_filename = f"processed_{filename}"
-        filePathOutput = os.path.join(OUTPUT_FOLDER, output_filename)
-        processed_image = Image.open(latest_output_file)
-        processed_image.save(filePathOutput)
+        image = Image.open(filepath)
+        cropped_image = crop_image(image, bounding_boxes[0])  # Chỉ lấy bounding box đầu tiên
         
-        
-        text_data = extract_text_from_image(file)
+        text_data = extract_text_from_image(cropped_image)
 
-        if text_data:
-            return jsonify({"text": text_data, "output_image": filePathOutput})
-        else:
-            return jsonify({"error": "No text found", "output_image": filePathOutput}), 400
+        return jsonify({"text": text_data})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+        if os.path.exists(label_file_path):
+            os.remove(label_file_path)
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
