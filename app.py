@@ -40,6 +40,9 @@ def crop_image(image, bounding_box):
     return cropped_image
 
 def extract_text_from_image(image):
+    if image.mode == 'RGBA':
+        image = image.convert('RGB')  
+
     image_io = io.BytesIO()
     image.save(image_io, format='JPEG')
     image_io.seek(0)
@@ -99,11 +102,11 @@ def upload_file():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(filepath):
-            os.remove(filepath)
-        if os.path.exists(label_file_path):
-            os.remove(label_file_path)
+    # finally:
+    #     if os.path.exists(filepath):
+    #         os.remove(filepath)
+    #     if os.path.exists(label_file_path):
+    #         os.remove(label_file_path)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
