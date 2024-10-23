@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 from ultralytics import YOLO
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import os
 import re
@@ -12,21 +12,13 @@ app = Flask(__name__)
 
 MODEL_PATH = 'best.pt'
 UPLOAD_FOLDER = os.path.abspath('./uploads')
+OUTPUT_FOLDER = os.path.abspath('./output_images')  # Directory to save output images
 YOLO_OUTPUT_FOLDER = os.path.abspath('./runs/detect/predict/labels')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)  # Create directory for output images
 
 model = YOLO(MODEL_PATH)
-
-def read_bounding_boxes(file_path):
-    bounding_boxes = []
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) >= 5:
-                bounding_boxes.append([float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])])
-    return bounding_boxes
 
 def crop_image(image, bounding_box):
     image_width, image_height = image.size
@@ -38,6 +30,28 @@ def crop_image(image, bounding_box):
     cropped_image = image.crop((left, top, right, bottom))
 
     return cropped_image
+
+def read_bounding_boxes(file_path):
+    bounding_boxes = []
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                bounding_boxes.append([float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])])
+    return bounding_boxes
+
+def draw_bounding_boxes(image, bounding_boxes):
+    draw = ImageDraw.Draw(image)
+    for box in bounding_boxes:
+        x_center, y_center, width, height = box
+        image_width, image_height = image.size
+        left = int((x_center - width / 2) * image_width)
+        right = int((x_center + width / 2) * image_width)
+        top = int((y_center - height / 2) * image_height)
+        bottom = int((y_center + height / 2) * image_height)
+        draw.rectangle([left, top, right, bottom], outline="red", width=3)  # Draw red bounding box
+    return image
 
 def extract_text_from_image(image):
     if image.mode == 'RGBA':
@@ -94,19 +108,22 @@ def upload_file():
             return jsonify({'error': 'No bounding boxes found in the label file'}), 400
         
         image = Image.open(filepath)
-        cropped_image = crop_image(image, bounding_boxes[0])  # Chỉ lấy bounding box đầu tiên
+        # Draw bounding boxes on the original image
+        image_with_boxes = draw_bounding_boxes(image.copy(), bounding_boxes)
         
+        # Save the image with bounding boxes
+        output_filename = f"output_{filename}"
+        output_filepath = os.path.join(OUTPUT_FOLDER, output_filename)
+        image_with_boxes.save(output_filepath)
+
+        # Extract text from the cropped area (using the first bounding box for simplicity)
+        cropped_image = crop_image(image, bounding_boxes[0])
         text_data = extract_text_from_image(cropped_image)
 
-        return jsonify({"text": text_data})
+        return jsonify({"text": text_data, "output_image_path": output_filepath})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    # finally:
-    #     if os.path.exists(filepath):
-    #         os.remove(filepath)
-    #     if os.path.exists(label_file_path):
-    #         os.remove(label_file_path)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
